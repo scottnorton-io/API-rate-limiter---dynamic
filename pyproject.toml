@@ -21,6 +21,11 @@ keywords = [
   "fieldguide",
   "requests",
   "http",
+  "slack",
+  "github",
+  "openai",
+  "airtable",
+  "zapier",
 ]
 classifiers = [
   "Programming Language :: Python",
@@ -51,9 +56,13 @@ dev = [
   "build>=1.0.0",
   "twine>=5.0.0",
   "mkdocs>=1.6.0",
+  "keyring>=24.0.0",
 ]
 docs = [
   "mkdocs>=1.6.0",
+]
+security = [
+  "keyring>=24.0.0",
 ]
 
 [tool.setuptools]

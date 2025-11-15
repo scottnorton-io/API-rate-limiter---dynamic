@@ -2,7 +2,7 @@
 [![Docs](https://github.com/scottnorton-io/dynamic-api-rate-limiter/actions/workflows/docs.yml/badge.svg)](https://github.com/scottnorton-io/dynamic-api-rate-limiter/actions/workflows/docs.yml)
 [![PyPI](https://img.shields.io/badge/PyPI-not--released-lightgrey.svg)](https://pypi.org/project/dynamic-api-rate-limiter/)
 
-# API Rate Limiter – Dynamic, Self-Tuning, 429-Aware Python Client
+# Dynamic API Rate Limiter – Self-Tuning, 429-Aware Python Client
 
 ### Developed by Scott Norton • https://github.com/scottnorton-io/
 
@@ -284,3 +284,21 @@ mkdocs serve
 ```
 
 Then open http://127.0.0.1:8000/ in your browser.
+## 🔐 Secure Secrets on macOS
+
+For macOS users, you can store API tokens in the native Keychain using the
+`keyring` library and avoid keeping secrets in plain environment variables.
+
+See:
+
+- `docs/security-macos.md` (or the "Security on macOS" page in the docs site)
+- `examples/example_keyring_macos.py`
+
+for a concrete pattern.
+
+## 🌐 Integrations Registry
+
+Supported integrations and their typical env vars/examples are documented in:
+
+- `INTEGRATIONS.md`
+- `docs/integrations.md` (also visible in the docs site under "Integrations")
