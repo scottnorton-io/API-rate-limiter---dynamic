@@ -10,13 +10,13 @@ class DynamicRateLimiter:
     - current_rate: requests per second (dynamic)
     - min_rate / max_rate: safety bounds for the dynamic rate
     - increase_step: additive increase on success
-    - decrease_factor: multiplicative decrease on 429
+    - decrease_factor: multiplicative decrease on backoff (e.g. 429)
 
     Usage:
         limiter = DynamicRateLimiter(initial_rate=5.0, min_rate=0.2, max_rate=20.0)
         limiter.acquire()
         # make request...
-        limiter.on_success()   # or limiter.on_429(retry_after)
+        limiter.on_success()   # or limiter.on_backoff(retry_after)
     """
 
     def __init__(
@@ -26,7 +26,7 @@ class DynamicRateLimiter:
         max_rate: float = 50.0,
         increase_step: float = 0.1,
         decrease_factor: float = 0.5,
-    ):
+    ) -> None:
         if initial_rate <= 0:
             raise ValueError("initial_rate must be > 0")
 
@@ -46,9 +46,7 @@ class DynamicRateLimiter:
         self._lock = threading.Lock()
 
     def _refill(self, now: float) -> None:
-        """
-        Refill tokens based on elapsed time and current_rate.
-        """
+        """Refill tokens based on elapsed time and current_rate."""
         elapsed = now - self._last_refill
         if elapsed <= 0:
             return
@@ -87,24 +85,26 @@ class DynamicRateLimiter:
                         missing = 1.0 - self._tokens
                         sleep_for = max(missing / self.current_rate, 0.01)
                     else:
-                        # Extremely conservative fallback if rate hit 0 (shouldn't happen due to min_rate)
+                        # Extremely conservative fallback if rate hit 0
                         sleep_for = 0.5
 
             time.sleep(sleep_for)
 
     def on_success(self) -> None:
-        """
-        Call this after a successful request to gently increase rate.
-        """
+        """Call this after a successful request to gently increase rate."""
         with self._lock:
             self.current_rate = min(
                 self.max_rate,
                 self.current_rate + self.increase_step,
             )
 
+    def on_backoff(self, retry_after: Optional[float] = None) -> None:
+        """Alias for :meth:`on_429` for more generic backoff semantics."""
+        self.on_429(retry_after=retry_after)
+
     def on_429(self, retry_after: Optional[float] = None) -> None:
         """
-        Call this when you receive a 429 response.
+        Call this when you receive a backoff-worthy response (429, 502, 503, etc.).
 
         - Scales rate down multiplicatively.
         - Applies cooldown based on Retry-After or a conservative guess.
@@ -126,5 +126,5 @@ class DynamicRateLimiter:
 
             self._cooldown_until = max(self._cooldown_until, now + cooldown)
 
-            # Optionally trim tokens so we restart cautiously
+            # Trim tokens so we restart cautiously
             self._tokens = min(self._tokens, self.current_rate)

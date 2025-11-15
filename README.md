@@ -1,5 +1,10 @@
 # API Rate Limiter – Dynamic, Self-Tuning, 429-Aware Python Client
 
+[![CI](https://github.com/scottnorton-io/dynamic-api-rate-limiter/actions/workflows/ci.yml/badge.svg)](https://github.com/scottnorton-io/dynamic-api-rate-limiter/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.9%20|%203.10%20|%203.11%20|%203.12-blue.svg)](https://github.com/scottnorton-io/dynamic-api-rate-limiter)
+
+
 ### Developed by Scott Norton • https://github.com/scottnorton-io/
 
 This library provides a production-grade, dynamic rate limiter designed for:
@@ -133,6 +138,8 @@ dynamic-api-rate-limiter/
 2. Add:
 
 ```python
+from api_ratelimiter.api_rate_config import ApiRateConfig, API_RATE_CONFIGS
+
 API_RATE_CONFIGS["new_api"] = ApiRateConfig(
     name="new_api",
     base_url="https://api.example.com/v1",
@@ -149,6 +156,7 @@ API_RATE_CONFIGS["new_api"] = ApiRateConfig(
 
 ```python
 from api_ratelimiter.clients import make_client_for
+
 client = make_client_for("new_api")
 resp = client.request("GET", "/some/endpoint")
 ```
@@ -157,7 +165,21 @@ resp = client.request("GET", "/some/endpoint")
 
 ## 📚 Background / Design Notes
 
-See `background.md` for detailed design discussion (AIMD algorithm, cooldown behavior, token architecture).
+For deeper context on the design, AIMD behavior, and how this fits into a broader compliance automation toolchain, see `background.md`.
+
+---
+
+## 🧪 Running the examples
+
+From the repo root:
+
+```bash
+python examples/example_notion.py
+python examples/example_vanta.py
+python examples/example_fieldguide.py
+```
+
+(You’ll need to export the appropriate `*_TOKEN` and ID environment variables as described in each example file.)
 
 ---
 
@@ -169,4 +191,6 @@ MIT License © 2025 Scott Norton
 
 ## 💬 Contributing
 
-See `CONTRIBUTING.md` for setup, linting, tests, and PR process.
+Issues and pull requests are welcome.
+
+See `CONTRIBUTING.md` for details on setup, linting, and tests.
