@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "api-ratelimiter"
+version = "0.1.0"
+description = "Dynamic, 429-aware API rate limiter with per-API configurations."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [
+  { name = "Scott Norton" }
+]
+dependencies = [
+  "requests>=2.31.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/scottnorton-io/api-ratelimiter"
+Repository = "https://github.com/scottnorton-io/api-ratelimiter"
+
+[tool.setuptools]
+packages = ["api_ratelimiter"]
