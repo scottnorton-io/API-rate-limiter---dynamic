@@ -1,32 +1,53 @@
-# Integration Registry
+# Built-in Integrations
 
-This project includes a growing set of **named integrations** that share:
+The library ships with conservative, documented defaults for a small set of common SaaS APIs.
+These are defined in `api_ratelimiter.api_rate_config.API_RATE_CONFIGS` and can be inspected
+or overridden at runtime.
 
-- A base URL
-- A conservative rate configuration
-- Example usage scripts
-- Typical environment variables
+> ⚠️ **Important**
+>
+> These defaults are intentionally conservative and may *not* match the absolute maximum
+> throughput that the provider allows. Always verify against the vendor’s documentation and
+> tune via overrides if you have strong requirements.
 
-The goal is to make it easy to drop this library into automation and
-compliance workflows without rethinking rate limiting for each API.
+## Summary table
 
-## Summary Table
+| Integration  | Description                             | Base URL                               | Example script                  | Notes                                                |
+|--------------|-----------------------------------------|----------------------------------------|---------------------------------|------------------------------------------------------|
+| `notion`     | Notion public API                       | `https://api.notion.com`               | `examples/example_notion.py`    | Tuned for typical workspace‑level integrations.      |
+| `vanta`      | Vanta API                               | `https://api.vanta.com`                | `examples/example_vanta.py`     | **Sample** – requires endpoint & auth customization. |
+| `fieldguide` | Fieldguide API                          | `https://api.fieldguide.io`            | `examples/example_fieldguide.py`| **Sample** – requires endpoint & auth customization. |
+| `airtable`   | Airtable REST API                       | `https://api.airtable.com`             | `examples/example_airtable.py`  | General REST patterns with backoff behaviour.        |
+| `zapier`     | Zapier Platform / REST hooks            | `https://nla.zapier.com` (or similar)  | `examples/example_zapier.py`    | Generic patterns for webhook / action usage.         |
+| `slack`      | Slack Web / SCIM API                    | `https://slack.com/api`                | `examples/example_slack.py`     | Consider app‑level tokens and scopes.                |
+| `github`     | GitHub REST API                         | `https://api.github.com`               | `examples/example_github.py`    | Works for GitHub.com and GHES with tuned base URL.   |
+| `openai`     | OpenAI REST API                         | `https://api.openai.com`               | `examples/example_openai.py`    | Adjust for your expected tokens / rpm usage.         |
 
-| Integration | Key name    | Base URL                        | Typical Use                                           | Env Vars (examples)                                                                 | Example script                          |
-|------------|-------------|----------------------------------|-------------------------------------------------------|-------------------------------------------------------------------------------------|----------------------------------------|
-| Notion     | `notion`    | `https://api.notion.com/v1`      | Docs, workspaces, evidence notes                      | `NOTION_TOKEN`, `NOTION_PAGE_ID`, `NOTION_DATABASE_ID`                              | `examples/example_notion.py`           |
-| Vanta      | `vanta`     | `https://api.vanta.com`          | Compliance automation / evidence                      | `VANTA_API_TOKEN`                                                                   | `examples/example_vanta.py` (future)   |
-| Fieldguide | `fieldguide`| `https://api.fieldguide.io`      | Audit & engagement workflows                          | `FIELDGUIDE_TOKEN`                                                                  | `examples/example_fieldguide.py` (future) |
-| Airtable   | `airtable`  | `https://api.airtable.com/v0`    | Light-weight data store, checklists, trackers         | `AIRTABLE_BASE_ID`, `AIRTABLE_TABLE_NAME`, `AIRTABLE_TOKEN`                         | `examples/example_airtable.py`         |
-| Zapier     | `zapier`    | `https://hooks.zapier.com`       | Event fan-out, glue between SaaS tools                | `ZAPIER_HOOK_PATH`                                                                  | `examples/example_zapier.py`           |
-| Slack      | `slack`     | `https://slack.com/api`          | Notifications, chat-based automation                  | `SLACK_BOT_TOKEN`, `SLACK_CHANNEL_ID`                                               | `examples/example_slack.py`            |
-| GitHub     | `github`    | `https://api.github.com`         | Repo metadata, evidence collection, code queries      | `GITHUB_TOKEN`, `GITHUB_ORG`                                                        | `examples/example_github.py`           |
-| OpenAI     | `openai`    | `https://api.openai.com/v1`      | AI-assisted summarization, drafting, analysis         | `OPENAI_API_KEY`, `OPENAI_MODEL`                                                    | `examples/example_openai.py`           |
+For some providers (notably Vanta and Fieldguide), we include **sample** examples that show
+how to wire up the client and limiter, but we do **not** publish full, official integrations.
+You must configure the exact endpoints, auth headers, and rate expectations for your specific
+account and data volumes.
 
-## Adding New Integrations
+## Inspecting and overriding configs
 
-1. Add a new `ApiRateConfig` entry to `api_ratelimiter/api_rate_config.py`.
-2. Optionally add an example under `examples/`.
-3. Update this registry and the docs (`docs/integrations.md`) accordingly.
+```python
+from api_ratelimiter.api_rate_config import get_api_rate_config
+from api_ratelimiter.config_overrides import (
+    load_api_rate_overrides_json,
+    merged_api_rate_configs,
+    list_available_integrations,
+)
 
-This keeps the library's ecosystem discoverable and predictable.
+# Get the default config for a single integration.
+notion_cfg = get_api_rate_config("notion")
+print(notion_cfg)
+
+# Load and merge JSON overrides.
+overrides = load_api_rate_overrides_json("overrides.json")
+all_configs = merged_api_rate_configs(overrides)
+
+print("Available integrations:", list_available_integrations(all_configs))
+```
+
+See `docs/configuration.md` for a more detailed discussion of how the config objects are
+structured and how to override them safely in production.

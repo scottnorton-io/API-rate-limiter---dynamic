@@ -1,316 +1,291 @@
-[![CI](https://github.com/scottnorton-io/dynamic-api-rate-limiter/actions/workflows/ci.yml/badge.svg)](https://github.com/scottnorton-io/dynamic-api-rate-limiter/actions/workflows/ci.yml)
-[![Docs](https://github.com/scottnorton-io/dynamic-api-rate-limiter/actions/workflows/docs.yml/badge.svg)](https://github.com/scottnorton-io/dynamic-api-rate-limiter/actions/workflows/docs.yml)
-[![PyPI](https://img.shields.io/badge/PyPI-not--released-lightgrey.svg)](https://pypi.org/project/dynamic-api-rate-limiter/)
+# Dynamic API Rate Limiter
 
-# Dynamic API Rate Limiter – Self-Tuning, 429-Aware Python Client
+A small, focused Python library for *dynamic*, backoff‑aware rate limiting of third‑party APIs.
 
-### Developed by Scott Norton • https://github.com/scottnorton-io/
+It is designed for integrations like Notion, Vanta, Fieldguide, Airtable, Zapier, Slack, GitHub, OpenAI, and similar
+SaaS APIs where you:
+- **Do not fully control** the upstream rate limits.
+- Need to **react to 429 / backoff signals** (and sometimes 5xx bursts).
+- Want a **simple, single‑process** library you can drop into workers or services.
 
-This library provides a production-grade, dynamic rate limiter designed for:
-
-- Notion API
-- Vanta API
-- Fieldguide API
-- Any REST API (plug-and-play)
-
-It automatically:
-
-- Avoids hitting rate limits
-- Adapts its speed dynamically
-- Respects `Retry-After` headers
-- Backs off safely on 429s (and optionally other status codes)
-- Learns the real allowable throughput of the API
-
-This is ideal for compliance automation, ETL, scripting, and backend services.
+At its core is an **AIMD (Additive‑Increase / Multiplicative‑Decrease)** token‑bucket rate limiter, wrapped in a
+small HTTP client and (optionally) an enterprise‑oriented wrapper that adds logging, metrics, and a simple
+circuit breaker.
 
 ---
 
-## 🔥 Features
+## Features
 
-### ✔️ Dynamic Rate Learning (AIMD)
+- **Dynamic rate limiting** using AIMD + token bucket.
+- **Backoff aware**: uses `Retry-After` and/or a conservative cooldown for 429 and other configured status codes.
+- **Thread‑safe**, single‑process design.
+- **Per‑API configuration** (Notion, Vanta, Fieldguide, Airtable, Zapier, Slack, GitHub, OpenAI, …).
+- **Config overrides** via JSON for per‑tenant / per‑environment tuning.
+- **Enterprise wrapper** with:
+  - Structured logging.
+  - Metrics callback (single event dict for each request).
+  - A simple circuit breaker to protect upstream APIs.
+- **Examples** for common APIs and patterns (including macOS Keychain usage).
 
-The limiter uses **AIMD (Additive Increase / Multiplicative Decrease)**:
+For full documentation, see the published docs site or the `docs/` directory in this repository.
 
-- Slowly increases speed on success
-- Quickly decreases speed on backoff (e.g. 429)
-- Auto-pauses when the API tells you to wait (`Retry-After`)
-- Stabilizes near the optimal rate for that API
+---
 
-### ✔️ API Configuration Registry
+## Quick start
 
-Centralized config table for:
-
-- Notion
-- Vanta
-- Fieldguide
-- Any API you add
-
-All rate-tuning parameters live in one place: `api_ratelimiter/api_rate_config.py`.
-
-### ✔️ One-Line API Client Creation
-
-```python
-from api_ratelimiter.clients import make_client_for
-
-notion = make_client_for("notion")
-vanta = make_client_for("vanta")
-fg = make_client_for("fieldguide")
+```bash
+pip install dynamic-api-rate-limiter
 ```
 
-### ✔️ Backoff-Aware HTTP Client
-
-- Honors `Retry-After` on HTTP 429.
-- Retries up to a configurable maximum.
-- Can treat additional status codes (like 503) as backoff signals via
-  `backoff_status_codes`.
+Basic usage with the built‑in configuration for a known integration (for example Notion):
 
 ```python
-client = make_client_for(
-    "notion",
+from api_ratelimiter.clients import make_client_from_config
+
+client = make_client_from_config("notion")
+
+resp = client.request(
+    "GET",
+    "/v1/databases",
+    headers={"Authorization": "Bearer YOUR_TOKEN", "Notion-Version": "2022-06-28"},
+    timeout=10.0,  # strongly recommended: always set a timeout
+)
+resp.raise_for_status()
+print(resp.json())
+```
+
+If you want full control over the configuration, you can create and wire everything yourself:
+
+```python
+from api_ratelimiter.dynamic_ratelimiter import DynamicRateLimiter
+from api_ratelimiter.clients import DynamicAPIClient
+
+limiter = DynamicRateLimiter(
+    rate_limit_per_sec=3.0,
+    burst_size=3.0,
+    increase_factor=0.1,
+    decrease_factor=0.5,
+    min_rate=0.1,
+    max_rate=10.0,
+    cooldown_multiplier=1.5,
+)
+
+client = DynamicAPIClient(
+    base_url="https://api.example.com",
+    limiter=limiter,
     backoff_status_codes=(429, 503),
 )
-```
 
-### ✔️ Logging & Metrics Ready
-
-- Uses Python's `logging` module for debug + backoff logs.
-- Exposes a `snapshot()` method for metrics (current rate, tokens, cooldown).
-- Example: `examples/example_logging_metrics.py` shows how to log limiter state.
-
----
-
-## 📦 Installation
-
-Install dependencies:
-
-```bash
-pip install requests
-```
-
-Clone the repo:
-
-```bash
-git clone https://github.com/scottnorton-io/dynamic-api-rate-limiter.git
-cd dynamic-api-rate-limiter
-```
-
-(Optional) install in editable mode:
-
-```bash
-pip install -e .
+response = client.request("GET", "/v1/resource", timeout=10.0)
 ```
 
 ---
 
-## 📘 Quick Start Example (Notion)
+## Architecture overview
 
-```python
-from api_ratelimiter.clients import make_client_for
-
-notion = make_client_for("notion")
-
-
-def get_page(page_id: str, token: str):
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Notion-Version": "2022-06-28",
-    }
-    resp = notion.request("GET", f"/pages/{page_id}", headers=headers)
-    resp.raise_for_status()
-    return resp.json()
-
-
-print(get_page("YOUR_PAGE_ID", "YOUR_INTEGRATION_TOKEN"))
-```
-
----
-
-## 🧠 Architecture
+This repository is intentionally small and focused. The main pieces are:
 
 ```text
-dynamic-api-rate-limiter/
-    api_ratelimiter/
-        __init__.py
-        dynamic_ratelimiter.py   # Adaptive token bucket (AIMD)
-        api_rate_config.py       # Centralized API config table
-        clients.py               # Dynamic API client + factory
-    examples/
-        example_notion.py
-        example_vanta.py
-        example_fieldguide.py
-        example_logging_metrics.py
-    .github/
-        workflows/ci.yml
-    tests/
-        test_dynamic_ratelimiter.py
-        test_clients.py
-    README.md
-    CONTRIBUTING.md
-    LICENSE
-    pyproject.toml
-    background.md
+api_ratelimiter/
+  __init__.py               # Public exports and package version.
+
+  dynamic_ratelimiter.py    # Core AIMD + token bucket rate limiter.
+                            # - Single-process, thread-safe.
+                            # - Tracks current rate, tokens, cooldown window.
+                            # - Exposes `acquire()`, `on_success()`, `on_429()`
+                            #   (historical name: generic backoff handler),
+                            #   and `snapshot()` for observability.
+
+  api_rate_config.py        # ApiRateConfig dataclass and built-in API configs.
+                            # - Central registry of per-API defaults.
+                            # - `get_api_rate_config(name)` helper.
+
+  clients.py                # HTTP client wrapper (requests-based).
+                            # - `DynamicAPIClient` that:
+                            #     * Calls `limiter.acquire()` before each request.
+                            #     * Treats configured status codes as backoff signals.
+                            #     * Uses `Retry-After` when present for 429s.
+                            # - Factory helpers:
+                            #     * `make_client_for(config)`
+                            #     * `make_client_from_config(name)`
+
+  config_overrides.py       # Runtime configuration overrides.
+                            # - `load_api_rate_overrides_json(path)`:
+                            #     Load validated overrides from JSON on disk.
+                            # - `merged_api_rate_configs(overrides)`:
+                            #     Merge overrides with built-in configs.
+                            # - `list_available_integrations()`:
+                            #     Introspection for CLIs / admin tools.
+
+  enterprise.py             # Enterprise wrapper.
+                            # - `EnterpriseClient` that wraps DynamicAPIClient and adds:
+                            #     * Structured logging.
+                            #     * Metrics handler callback.
+                            #     * Circuit breaker (`CircuitBreakerConfig`). 
+                            # - Raises `CircuitOpenError` when the breaker is open.
+
+examples/
+  example_notion.py         # Notion API example.
+  example_vanta.py          # Vanta example (sample; requires customization).
+  example_fieldguide.py     # Fieldguide example (sample; requires customization).
+  example_airtable.py       # Airtable example.
+  example_zapier.py         # Zapier example.
+  example_slack.py          # Slack example.
+  example_github.py         # GitHub example.
+  example_openai.py         # OpenAI example.
+  example_keyring_macos.py  # macOS keychain usage pattern.
+
+docs/
+  getting-started.md
+  usage.md
+  integrations.md
+  configuration.md
+  deployment.md
+  metrics.md
+  design.md
+  security-macos.md
+  changelog.md
 ```
 
 ---
 
-## 🛠 Adding a New API
+## Enterprise usage (high level)
 
-1. Edit `api_ratelimiter/api_rate_config.py`
-2. Add:
+For more advanced cases, you can use the enterprise wrapper to get structured logging, metrics,
+and a circuit breaker:
 
 ```python
-from api_ratelimiter.api_rate_config import ApiRateConfig, API_RATE_CONFIGS
-
-API_RATE_CONFIGS["new_api"] = ApiRateConfig(
-    name="new_api",
-    base_url="https://api.example.com/v1",
-    initial_rate=2.0,
-    min_rate=0.3,
-    max_rate=5.0,
-    increase_step=0.1,
-    decrease_factor=0.5,
-    documented_limit_desc="Vendor says 5 req/sec allowed.",
+from api_ratelimiter.enterprise import (
+    EnterpriseClient,
+    CircuitBreakerConfig,
+    CircuitOpenError,
 )
-```
 
-3. Use it:
+from api_ratelimiter.api_rate_config import get_api_rate_config
 
-```python
-from api_ratelimiter.clients import make_client_for
+def metrics_handler(event: dict) -> None:
+    # Example: push to your metrics system of choice.
+    # `event` includes: integration, tenant_id, status_code, elapsed_ms,
+    # limiter snapshot, context, and error details (if any).
+    print("EVENT", event)
 
-client = make_client_for("new_api")
-resp = client.request("GET", "/some/endpoint")
-```
-
----
-
-## 📊 Logging & Metrics
-
-The limiter integrates with the standard `logging` module and exposes
-a `snapshot()` method for metrics.
-
-### Enable logging
-
-```python
-import logging
-
-logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+enterprise_client = EnterpriseClient(
+    integration="notion",
+    tenant_id="tenant-123",
+    base_url="https://api.notion.com",
+    rate_config=get_api_rate_config("notion"),
+    circuit_breaker_config=CircuitBreakerConfig(
+        failure_threshold=5,
+        open_interval=60.0,
+    ),
+    metrics_handler=metrics_handler,
 )
+
+try:
+    resp = enterprise_client.request(
+        "GET", "/v1/databases", timeout=10.0
+    )
+except CircuitOpenError:
+    # The circuit is open; you may want to short‑circuit or return a fast failure.
+    ...
 ```
 
-You will see:
-
-- `DEBUG` logs when the rate increases.
-- `WARNING` logs when backoff (`on_429`) is triggered.
-
-### Emit metrics from snapshot()
-
-```python
-from api_ratelimiter.clients import make_client_for
-
-client = make_client_for("notion")
-limiter = client.limiter
-
-snap = limiter.snapshot()
-# {
-#   "current_rate": 2.5,
-#   "tokens": 1.7,
-#   "cooldown_until": 1708000000.123
-# }
-```
-
-You can push these values to Prometheus, CloudWatch, or any metrics backend
-you use. The example script `examples/example_logging_metrics.py` shows how
-to log them periodically.
+See `docs/usage.md` and `docs/metrics.md` for more detailed patterns and examples.
 
 ---
 
-## 🧪 Running the examples
+## Configuration overrides
 
-From the repo root:
+By default, the library ships with conservative per‑API configs for several common SaaS APIs.
+You can override or extend these at runtime using a JSON file and the helpers in
+`api_ratelimiter.config_overrides`.
+
+A minimal override file might look like:
+
+```json
+{
+  "custom_api": {
+    "rate_limit_per_sec": 2.0,
+    "burst_size": 2.0,
+    "increase_factor": 0.1,
+    "decrease_factor": 0.5,
+    "min_rate": 0.1,
+    "max_rate": 5.0,
+    "cooldown_multiplier": 1.5
+  }
+}
+```
+
+Then in Python:
+
+```python
+from api_ratelimiter.config_overrides import (
+    load_api_rate_overrides_json,
+    merged_api_rate_configs,
+    list_available_integrations,
+)
+
+overrides = load_api_rate_overrides_json("overrides.json")
+configs = merged_api_rate_configs(overrides)
+
+print("Available integrations:", list_available_integrations(configs))
+```
+
+---
+
+## Timeouts and reliability
+
+This library **does not** force a default timeout on HTTP requests, but it **strongly recommends**
+that you always pass an explicit `timeout` to `.request(...)` (on both `DynamicAPIClient` and
+`EnterpriseClient`).
+
+```python
+response = client.request("GET", "/v1/resource", timeout=10.0)
+```
+
+Without a timeout, your code can hang indefinitely on a slow or unresponsive upstream API.
+
+---
+
+## Concurrency model
+
+- The rate limiter is **thread‑safe** within a single process.
+- It is **not distributed**: if you run multiple processes or nodes, each process will have its
+  own limiter state.
+- For multi‑process / multi‑node deployments, you can still use this library as a *local*
+  protection mechanism at each worker while relying on upstream limits and/or a future
+  distributed implementation for hard global limits.
+
+---
+
+## Exceptions
+
+The library tries to keep exceptions simple and predictable:
+
+- HTTP errors are surfaced via `requests` as usual (`response.raise_for_status()`).
+- When the dynamic client gives up after the configured `max_retries_on_backoff`, it raises
+  a **`RuntimeError`** with a short explanation.
+- When the enterprise circuit breaker is open, `EnterpriseClient.request(...)` raises
+  **`CircuitOpenError`** before any HTTP call is made.
+
+See the docstrings and `docs/usage.md` for more detail.
+
+---
+
+## Development
+
+- Formatting & linting: `ruff`
+- Tests: `pytest`
+- Docs: `mkdocs`
+
+Typical commands during development:
 
 ```bash
-python examples/example_notion.py
-python examples/example_vanta.py
-python examples/example_fieldguide.py
-python examples/example_logging_metrics.py
-```
-
-(You’ll need to export the appropriate `*_TOKEN` and ID environment variables
-as described in each example file.)
-
----
-
-## 📚 Background / Design Notes
-
-For deeper context on:
-
-- Token bucket implementation
-- AIMD behavior
-- Backoff + Retry-After flow
-- Tuning guidance
-
-see [`background.md`](./background.md).
-
----
-
-## 📄 License
-
-MIT License © 2025 Scott Norton
-
----
-
-## 💬 Contributing
-
-Issues and pull requests are welcome.
-
-See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for details on setup, linting, and tests.
-
-
-## 📖 Documentation Site
-
-Once GitHub Pages is enabled for this repository, the MkDocs documentation
-will be available at:
-
-- https://scottnorton-io.github.io/dynamic-api-rate-limiter/
-
-You can also build and serve the docs locally:
-
-```bash
-pip install mkdocs
+pip install -e ".[dev]"
+ruff check api_ratelimiter tests examples
+pytest
 mkdocs serve
 ```
 
-Then open http://127.0.0.1:8000/ in your browser.
-## 🔐 Secure Secrets on macOS
-
-For macOS users, you can store API tokens in the native Keychain using the
-`keyring` library and avoid keeping secrets in plain environment variables.
-
-See:
-
-- `docs/security-macos.md` (or the "Security on macOS" page in the docs site)
-- `examples/example_keyring_macos.py`
-
-for a concrete pattern.
-
-## 🌐 Integrations Registry
-
-Supported integrations and their typical env vars/examples are documented in:
-
-- `INTEGRATIONS.md`
-- `docs/integrations.md` (also visible in the docs site under "Integrations")
-
-## 🚀 Deployment & Environments
-
-Recommended patterns for:
-
-- macOS local development (with `python3 -m venv .venv` and Keychain)
-- CI (GitHub Actions with secrets)
-- Docker / containerized workloads
-
-are documented in:
-
-- `docs/deployment.md` (also visible in the docs site under "Deployment Patterns")
+CI runs the linter and test suite across supported Python versions on every push and pull
+request. A separate workflow builds and publishes docs and tagged releases to PyPI.
