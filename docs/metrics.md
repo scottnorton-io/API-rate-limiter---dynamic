@@ -69,3 +69,55 @@ logger.info(
 
 For more detailed examples (including Prometheus-style pseudo-code), see
 `METRICS.md` in the repository.
+
+---
+
+## Enterprise Client Wrapper
+
+For larger deployments you may want more than just the raw rate limiter.
+The :class:`EnterpriseClient` adds:
+
+- Structured logging for each request.
+- A pluggable `metrics_handler` callback.
+- Optional circuit-breaker behavior.
+- Optional `tenant_id` to support multi-tenant usage.
+
+```python
+import logging
+from api_ratelimiter import (
+    EnterpriseClient,
+    CircuitBreakerConfig,
+    make_enterprise_client,
+)
+
+logger = logging.getLogger("api_ratelimiter_example")
+
+def metrics_sink(event: dict) -> None:
+    # Map this event into Prometheus / StatsD / OpenTelemetry as needed
+    print("metrics event:", event)
+
+cb_cfg = CircuitBreakerConfig(failure_threshold=5, open_interval=60.0)
+
+client = make_enterprise_client(
+    "notion",
+    tenant_id="tenant-123",
+    logger=logger,
+    metrics_handler=metrics_sink,
+    circuit_breaker=cb_cfg,
+)
+
+resp = client.request("GET", "/v1/search", json={"query": "example"})
+```
+
+The `event` dictionary handed to `metrics_handler` contains keys like:
+
+- `integration`
+- `tenant_id`
+- `method`
+- `path`
+- `status_code` (if a response was received)
+- `elapsed_ms`
+- `rate_snapshot` (from the underlying limiter)
+- `error` (if an exception occurred)
+- `context` (any additional context you passed)
+```)

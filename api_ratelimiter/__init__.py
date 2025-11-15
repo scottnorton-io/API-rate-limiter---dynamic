@@ -12,6 +12,10 @@ This module exposes the primary public types and helpers:
 - :func:`load_api_rate_overrides_json`
 - :func:`merged_api_rate_configs`
 - :func:`list_available_integrations`
+- :class:`EnterpriseClient`
+- :class:`CircuitBreakerConfig`
+- :class:`CircuitOpenError`
+- :func:`make_enterprise_client`
 """
 
 from __future__ import annotations
@@ -23,6 +27,13 @@ from .config_overrides import (
     load_api_rate_overrides_json,
     merged_api_rate_configs,
     list_available_integrations,
+)
+from .enterprise import (
+    EnterpriseClient,
+    CircuitBreakerConfig,
+    CircuitOpenError,
+    MetricsHandler,
+    make_enterprise_client,
 )
 
 __all__ = [
@@ -36,6 +47,11 @@ __all__ = [
     "load_api_rate_overrides_json",
     "merged_api_rate_configs",
     "list_available_integrations",
+    "EnterpriseClient",
+    "CircuitBreakerConfig",
+    "CircuitOpenError",
+    "MetricsHandler",
+    "make_enterprise_client",
 ]
 
 __version__ = "0.1.0"

@@ -599,3 +599,38 @@ client = make_client_from_config(cfg)
 ```
 
 See `docs/configuration.md` for the expected JSON format and more examples.
+
+---
+
+# 24. Enterprise Patterns
+
+For more advanced use cases, you can wrap a `DynamicAPIClient` with
+`EnterpriseClient` to get structured logging, metrics callbacks, and
+basic circuit breaking.
+
+```python
+import logging
+from api_ratelimiter import make_enterprise_client, CircuitBreakerConfig
+
+logger = logging.getLogger("my-service")
+
+def metrics_sink(event: dict) -> None:
+    # Forward to Prometheus/StatsD/OpenTelemetry
+    ...
+
+cb_cfg = CircuitBreakerConfig(failure_threshold=10, open_interval=30.0)
+
+client = make_enterprise_client(
+    "github",
+    tenant_id="acme-inc",
+    logger=logger,
+    metrics_handler=metrics_sink,
+    circuit_breaker=cb_cfg,
+)
+
+resp = client.request("GET", "/user/repos")
+```
+
+This keeps the core rate limiting logic the same while adding the
+observability and safety features that enterprise environments expect.
+```)
