@@ -12,6 +12,7 @@ nav:
   - Getting Started: getting-started.md
   - Usage: usage.md
   - Integrations: integrations.md
+  - Deployment Patterns: deployment.md
   - Design: design.md
   - Metrics & Observability: metrics.md
   - Security on macOS: security-macos.md

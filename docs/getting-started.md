@@ -80,3 +80,23 @@ You can:
 - Adjust existing configs.
 - Add new entries for custom APIs.
 - Keep all rate tuning in a single place.
+
+ ---
+
+ ## Virtual Environments on macOS
+
+A simple, Homebrew-free pattern for Python virtual environments:
+
+ ```bash
+ # From your project root
+ python3 -m venv .venv
+ source .venv/bin/activate
+
+ # Upgrade pip and install dev dependencies
+ pip install --upgrade pip
+ pip install -e ".[dev]"
+ ```
+
+ In VS Code, use "Python: Select Interpreter" and choose the interpreter from
+ `.venv/bin/python` so that linting, tests, and debugging all use the same
+ environment.

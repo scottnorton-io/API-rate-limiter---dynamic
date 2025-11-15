@@ -302,3 +302,15 @@ Supported integrations and their typical env vars/examples are documented in:
 
 - `INTEGRATIONS.md`
 - `docs/integrations.md` (also visible in the docs site under "Integrations")
+
+## 🚀 Deployment & Environments
+
+Recommended patterns for:
+
+- macOS local development (with `python3 -m venv .venv` and Keychain)
+- CI (GitHub Actions with secrets)
+- Docker / containerized workloads
+
+are documented in:
+
+- `docs/deployment.md` (also visible in the docs site under "Deployment Patterns")
