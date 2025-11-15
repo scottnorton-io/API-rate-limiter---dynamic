@@ -445,3 +445,51 @@ This `USAGE.md` is meant to be a **comprehensive operational guide**. It should 
 
 And will continue to grow as we add features.
 
+
+---
+
+# 21. Airtable and Zapier Patterns
+
+## Airtable
+
+Airtable fits naturally into the same pattern as Notion:
+
+```python
+import os
+from api_ratelimiter import make_client_for
+
+airtable = make_client_for("airtable")
+
+base_id = os.environ["AIRTABLE_BASE_ID"]
+table_name = os.environ["AIRTABLE_TABLE_NAME"]
+token = os.environ["AIRTABLE_TOKEN"]
+
+headers = {"Authorization": f"Bearer {token}"}
+path = f"/{base_id}/{table_name}"
+
+resp = airtable.request("GET", path, headers=headers)
+resp.raise_for_status()
+data = resp.json()
+```
+
+You can then layer in pagination and filtering using Airtable's API parameters.
+
+## Zapier
+
+For Zapier, the most common pattern is calling a **Catch Hook** endpoint with JSON payloads.
+Using the `zapier` config keeps your script from overwhelming Zapier if you batch many events:
+
+```python
+import os
+from api_ratelimiter import make_client_for
+
+zapier = make_client_for("zapier")
+hook_path = os.environ["ZAPIER_HOOK_PATH"]
+
+payload = {"event": "example", "source": "dynamic-api-rate-limiter"}
+resp = zapier.request("POST", f"/{hook_path.lstrip('/')}", json=payload)
+resp.raise_for_status()
+```
+
+This is especially useful in automation or ETL-style jobs where you may trigger
+a large number of Zaps in sequence.
