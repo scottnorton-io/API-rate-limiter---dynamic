@@ -1,0 +1,16 @@
+site_name: Dynamic API Rate Limiter
+site_description: Dynamic, 429-aware API rate limiter with self-tuning AIMD and per-API configs.
+site_url: ""
+repo_url: https://github.com/scottnorton-io/dynamic-api-rate-limiter
+repo_name: scottnorton-io/dynamic-api-rate-limiter
+
+theme:
+  name: readthedocs
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Usage: usage.md
+  - Design: design.md
+  - Metrics & Observability: metrics.md
+  - Changelog: changelog.md
