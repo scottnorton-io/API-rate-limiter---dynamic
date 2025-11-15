@@ -1,331 +1,189 @@
-# 📘 API Rate Limiter Cookbook
+# Background & Design Notes
 
->Dynamic, Self-Tuning Rate Limiting for Notion, Vanta, Fieldguide, and Any Other API
+This document provides additional context on the goals, design choices, and
+trade-offs behind `dynamic-api-rate-limiter`.
 
-## 🔥 Overview
+The short version:
 
-This cookbook provides a production-ready, fully modular system for:
-
-Dynamically rate-limiting API calls
-- Respecting 429 Too Many Requests responses
-- Automatically obeying Retry-After headers
-- Maintaining a config table of known API limits (Notion, Vanta, Fieldguide, etc.)
-- Creating client objects automatically from that configuration
-- Scaling to any number of APIs with minimal code
-
-The system uses an AIMD (Additive Increase / Multiplicative Decrease) algorithm similar to TCP congestion control.
-
-This ensures that your integration:
-- Operates at the optimal allowable speed
-- Never exceeds rate limits
-- Adapts dynamically to changing API/server behavior
-- Is generic enough to work with ANY API
-
-It is ideal for compliance automation, integrations, ETL jobs, microservices, and high-volume API scripting.
+- We want **maximum safe throughput** against third-party APIs.
+- We want to **avoid hard-coding limits** whenever possible.
+- We want to **treat the API as the source of truth** about when to slow down
+  (via status codes and `Retry-After` headers).
+- We want a small, composable tool that can be dropped into scripts or used
+  as a library.
 
 ---
 
-## 🍳 THE COOKBOOK
+## Goals
 
-### 1. Core Concepts
-### ✔️ Dynamic Rate Limiting
+1. **Stay under vendor rate limits without guessing blindly.**
+   Hard-coding `60 requests/minute` works until:
+   - The vendor changes limits.
+   - Limits differ by endpoint or plan.
+   - You run multiple workers and collectively exceed the limit.
 
-Your rate limiter starts at an initial request-per-second rate, then:
-- Increases the allowable rate slightly after each successful request
-- Decreases the rate aggressively if a 429 is encountered
-- Pauses during any server-provided Retry-After window
-- Learns and stabilizes around the real-world rate limit of the target API
+2. **Adapt dynamically based on feedback from the API.**
+   Instead of just capping at an arbitrary rate, we want to *learn* the
+   effective ceiling by watching for overload signals like `429`, `502`,
+   and `503`.
 
-This allows you to hit the maximum sustainable speed without guessing.
+3. **Be easy to adopt.**
+   - A single `make_client_for("notion")` call.
+   - Centralized configuration for each API.
+   - No heavy dependencies.
 
-### ✔️ API Configuration Registry
+---
 
-Each API gets a configuration entry:
-```python
+## Core Design
 
-ApiRateConfig(
-    name="notion",
-    base_url="https://api.notion.com/v1",
-    initial_rate=2.0,
-    min_rate=0.3,
-    max_rate=3.5,
-    increase_step=0.1,
-    decrease_factor=0.5,
-    documented_limit_desc="~3 requests/second per integration",
-)
+There are three main pieces:
 
-```
+1. `DynamicRateLimiter` – an adaptive token-bucket limiter using
+   AIMD (Additive Increase / Multiplicative Decrease).
+2. `DynamicAPIClient` – a small HTTP wrapper that applies the limiter and
+   handles backoff on selected status codes.
+3. `ApiRateConfig` – a registry of per-API defaults (Notion, Vanta,
+   Fieldguide, etc.).
 
-You can maintain a table of:
-- Documented vendor rate limits
-- Empirical settings determined by testing
-- Custom per-API behavior
+### 1. DynamicRateLimiter (AIMD + token bucket)
 
-### ✔️ Client Factory
+The limiter tracks a **current rate in requests per second** and exposes:
 
-Your scripts never instantiate raw clients.
+- `acquire()` – blocks until a request token is available.
+- `on_success()` – called after successful (non-backoff) responses.
+- `on_429(retry_after)` – called when the API signals overload or rate limit.
 
-Instead:
+Internally it uses a token bucket:
 
-```python
+- Tokens accumulate over time at `current_rate`.
+- Each outgoing request consumes one token.
+- The bucket is capped at roughly two seconds' worth of tokens to avoid
+  unbounded bursts.
 
-notion = make_client_for("notion")
-vanta  = make_client_for("vanta")
-fg     = make_client_for("fieldguide")
+The rate evolves using AIMD:
 
-```
+- **Additive Increase** (on success):
+  - `current_rate += increase_step` up to `max_rate`.
+  - This slowly probes for additional capacity.
 
-This ensures:
-- Consistency
-- No duplication
-- Centralized configuration
-- Easy deployment and scaling
+- **Multiplicative Decrease** (on backoff):
+  - `current_rate = current_rate * decrease_factor`, bounded by `min_rate`.
+  - This quickly backs away when the API complains.
 
-## 2. Installation (local or production)
+Cooldowns are enforced via a wall-clock deadline:
 
-Your repo will contain:
+- When `on_429(retry_after)` is called, we compute a `cooldown_until` time.
+- `acquire()` will:
+  - Immediately return if we're past the cooldown and have tokens.
+  - Otherwise sleep until `cooldown_until` or until tokens become available.
 
-```text
+### 2. DynamicAPIClient (HTTP wrapper)
 
-api-limiter/
-├── dynamic_ratelimiter.py
-├── dynamic_api_client.py
-├── api_rate_config.py
-├── examples/
-│   ├── example_notion.py
-│   ├── example_vanta.py
-│   └── example_fieldguide.py
-├── README.md
-└── pyproject.toml (optional)
+The client is intentionally thin:
 
-```
+- Calls `limiter.acquire()` before each request.
+- Dispatches HTTP calls through a `requests.Session`.
+- Categorizes responses into:
+  - **Normal**: status not in `backoff_status_codes`.
+  - **Backoff**: status in `backoff_status_codes` (by default: 429, 502, 503).
 
-Install dependencies:
+Normal responses:
 
-```bash
+- Call `limiter.on_success()`.
+- Return the response to the caller.
 
-pip install requests
+Backoff responses:
 
-```
+- Read the `Retry-After` header if present (seconds).
+- Call `limiter.on_429(retry_after_seconds)`.
+- Retry up to `max_retries_on_429` times.
 
-## 3. Dynamic Rate Limiter (Core Algorithm)
+The reasoning behind the default backoff set:
 
-**File**: `dynamic_ratelimiter.py`
+- **429 Too Many Requests** – explicit signal that you hit a rate limit.
+- **502 Bad Gateway / 503 Service Unavailable** – often mean a transient
+  overload or upstream issue. Backing off slightly is almost always
+  the polite thing to do.
 
-```python
+If you want stricter or looser behaviour, you can override
+`backoff_status_codes` when constructing the client.
 
-<insert same code from prior message verbatim>
+### 3. ApiRateConfig (per-API defaults)
 
-```
+Each API gets a small configuration record:
 
-(This code is already complete and production-ready.)
+- `base_url`: where requests go.
+- `initial_rate`: starting guess for requests per second.
+- `min_rate` / `max_rate`: safe bounds for dynamic rate changes.
+- `increase_step` / `decrease_factor`: tuning knobs for AIMD behaviour.
+- `documented_limit_desc`: human-readable notes about vendor limits.
 
-## 4. API Client that Uses the Limiter
->API wrapper that tunes itself
+The config lives in `api_rate_config.py` and is used by `make_client_for()`
+to construct a `DynamicAPIClient` with sensible defaults for each API.
 
-This integrates the dynamic limiter with `requests`, and strictly respects 429:
+---
 
-Every call → `limiter.acquire()`
-
-On 429 → read Retry-After, call `limiter.on_429(...)`, then try again
-
-On non-429 success → `limiter.on_success()`
-
-**File**: `dynamic_api_client.py`
-
-```python
-
-# dynamic_api_client.py
-import time
-from typing import Optional, Dict, Any
-
-import requests
-
-from dynamic_ratelimiter import DynamicRateLimiter
-
-
-class DynamicAPIClient:
-    def __init__(
-        self,
-        base_url: str,
-        *,
-        initial_rate: float = 5.0,
-        min_rate: float = 0.1,
-        max_rate: float = 50.0,
-        increase_step: float = 0.1,
-        decrease_factor: float = 0.5,
-        max_retries_on_429: int = 20,
-        session: Optional[requests.Session] = None,
-    ):
-        self.base_url = base_url.rstrip("/")
-        self.session = session or requests.Session()
-        self.max_retries_on_429 = max_retries_on_429
-
-        self.limiter = DynamicRateLimiter(
-            initial_rate=initial_rate,
-            min_rate=min_rate,
-            max_rate=max_rate,
-            increase_step=increase_step,
-            decrease_factor=decrease_factor,
-        )
-
-    def request(
-        self,
-        method: str,
-        path: str,
-        *,
-        params: Optional[Dict[str, Any]] = None,
-        json: Optional[Dict[str, Any]] = None,
-        headers: Optional[Dict[str, str]] = None,
-        **kwargs,
-    ) -> requests.Response:
-
-        url = f"{self.base_url}/{path.lstrip('/')}"
-        retries = 0
-
-        while True:
-            # Wait until we're allowed to send the next request
-            self.limiter.acquire()
-
-            response = self.session.request(
-                method=method.upper(),
-                url=url,
-                params=params,
-                json=json,
-                headers=headers,
-                **kwargs,
-            )
-
-            # Non-429 responses
-            if response.status_code != 429:
-                # Treat any non-429 as a successful sample for AIMD.
-                self.limiter.on_success()
-                return response
-
-            # Hit 429: handle dynamically
-            retries += 1
-            # Get Retry-After header if present
-            retry_after_raw = response.headers.get("Retry-After")
-            retry_after_seconds: Optional[float] = None
-
-            if retry_after_raw is not None:
-                try:
-                    retry_after_seconds = float(retry_after_raw)
-                except ValueError:
-                    # If server returns a date instead of seconds, just ignore
-                    retry_after_seconds = None
-
-            self.limiter.on_429(retry_after_seconds)
-
-            if retries > self.max_retries_on_429:
-                raise RuntimeError(
-                    f"Exceeded max_retries_on_429 ({self.max_retries_on_429}) "
-                    f"for {url}"
-                )
-            # Loop again – acquire() will honor any cooldown we just set
-
-```
-
-## 5. API Configuration Table
-
-**File**: `api_rate_config.py`
-
-```python
-
-# api_rate_config.py
-from dataclasses import dataclass
-from typing import Dict, Optional
-
-
-@dataclass(frozen=True)
-class ApiRateConfig:
-    name: str
-    base_url: str
-
-    # Dynamic rate-limiter tuning
-    initial_rate: float       # starting requests/sec
-    min_rate: float
-    max_rate: float
-    increase_step: float
-    decrease_factor: float
-
-    # Optional: documented hard limit for reference (not directly used)
-    documented_limit_desc: Optional[str] = None
-
-
-# Registry of known APIs.
-#
-# Notion: official docs say ~3 requests per second on average per integration,
-# with bursts allowed. :contentReference[oaicite:0]{index=0}
-API_RATE_CONFIGS: Dict[str, ApiRateConfig] = {
-    "notion": ApiRateConfig(
-        name="notion",
-        base_url="https://api.notion.com/v1",
-        initial_rate=2.0,         # start a bit below 3 rps
-        min_rate=0.3,             # don't go absurdly low
-        max_rate=3.5,             # allow small bursts above the doc avg
-        increase_step=0.1,
-        decrease_factor=0.5,
-        documented_limit_desc="~3 requests/second per integration on average",
-    ),
-
-    # Vanta: public docs don’t clearly state a numeric rate limit.
-    # Let the dynamic limiter learn + rely on 429 handling.
-    "vanta": ApiRateConfig(
-        name="vanta",
-        base_url="https://api.vanta.com",  # adjust if your tenant uses a variant
-        initial_rate=3.0,
-        min_rate=0.5,
-        max_rate=10.0,
-        increase_step=0.2,
-        decrease_factor=0.5,
-        documented_limit_desc="Rate limit not clearly published; dynamic tuning + 429 handling.",
-    ),
-
-    # Fieldguide: same situation, no obvious published hard numbers.
-    "fieldguide": ApiRateConfig(
-        name="fieldguide",
-        base_url="https://api.fieldguide.io",  # verify your actual base URL
-        initial_rate=3.0,
-        min_rate=0.5,
-        max_rate=10.0,
-        increase_step=0.2,
-        decrease_factor=0.5,
-        documented_limit_desc="Rate limit not clearly published; dynamic tuning + 429 handling.",
-    ),
-}
-
-
-def get_api_rate_config(name: str) -> ApiRateConfig:
-    """
-    Look up a named API config (e.g. 'notion', 'vanta', 'fieldguide').
-
-    Raises KeyError if not found.
-    """
-    key = name.lower()
-    return API_RATE_CONFIGS[key]
-
-```
-
-## 6. Example Usage
-
-**File**: `examples/example_notion.py`
-
-```python
-
-from clients import make_client_for
-
-notion = make_client_for("notion")
-
-def get_page(page_id: str, token: str):
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Notion-Version": "2022-06-28",
-    }
-    resp = notion.request("GET", f"/pages/{page_id}", headers=headers)
-    resp.raise_for_status()
-    return resp.json()
-
-print(get_page("YOUR_PAGE_ID", "YOUR_TOKEN"))
-
-```
+## Error Handling & Trade-offs
+
+### Why still call it `on_429` if it handles 502/503?
+
+The name is historical: the method was originally introduced for handling
+429 status codes specifically. It has since been generalized as the
+"backoff hook" for all configured overload responses.
+
+Renaming it to `on_backoff()` would be more semantically accurate, but
+would also be a breaking change for existing users. For now, we keep the
+name and treat 429, 502, 503 (and any other status codes you configure)
+as triggers for the same backoff logic.
+
+### Per-process vs global limits
+
+The current implementation is **process-local**:
+
+- Each process or worker has its own limiter.
+- If you run many workers, they may collectively exceed a global rate
+  limit that the vendor enforces across your account or IP.
+
+For most single-script or modestly parallel use cases this is fine.
+For highly concurrent workloads, a future evolution could add a
+distributed backend (e.g. Redis) to coordinate tokens across workers.
+
+---
+
+## Testing Strategy
+
+The `tests/` directory includes:
+
+- Behavioural tests for `DynamicRateLimiter`:
+  - Ensuring `on_success()` increases rate up to `max_rate`.
+  - Ensuring `on_429()` reduces rate and enforces cooldown without
+    relying on real wall-clock sleeps (we patch `time.sleep` and
+    `time.monotonic` in tests).
+- Behavioural tests for `DynamicAPIClient`:
+  - Verifying that normal responses call `on_success()`.
+  - Verifying that 429 responses use `Retry-After` and call the backoff hook.
+  - Verifying that 503 responses trigger backoff when part of
+    `backoff_status_codes`.
+
+These tests are intentionally small and fast so they can run in CI on
+every push and pull request.
+
+---
+
+## Extensibility
+
+A few ways you can extend this library safely:
+
+- **New APIs**: add entries to `API_RATE_CONFIGS` and optionally examples
+  under `examples/`.
+- **Custom backoff policy**: subclass `DynamicRateLimiter` or provide your
+  own limiter object as long as it exposes the same three methods
+  (`acquire`, `on_success`, `on_429`).
+- **Telemetry / metrics**: wrap calls to `on_success` / `on_429` and
+  `acquire` to emit tracing or metrics (e.g. Prometheus, logs).
+
+---
+
+If you have ideas for improving the algorithm, adding new presets for
+popular APIs, or supporting a distributed limiter backend, contributions
+are very welcome. See `CONTRIBUTING.md` for details.
