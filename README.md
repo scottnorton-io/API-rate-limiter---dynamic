@@ -1,23 +1,21 @@
-🚀 README.md (complete)
+# API Rate Limiter – Dynamic, Self-Tuning, 429-Aware Python Client
 
-
-# API Rate Limiter – Dynamic, Self-Tuning, 429-Aware Python Client  
 ### Developed by Scott Norton • https://github.com/scottnorton-io/
 
 This library provides a production-grade, dynamic rate limiter designed for:
 
-- Notion API  
-- Vanta API  
-- Fieldguide API  
-- Any REST API (plug-and-play)  
+- Notion API
+- Vanta API
+- Fieldguide API
+- Any REST API (plug-and-play)
 
 It automatically:
 
-- Avoids hitting rate limits  
-- Adapts its speed dynamically  
-- Respects `Retry-After` headers  
-- Backoffs safely on 429s  
-- Learns the real allowable throughput of the API  
+- Avoids hitting rate limits
+- Adapts its speed dynamically
+- Respects `Retry-After` headers
+- Backs off safely on 429s
+- Learns the real allowable throughput of the API
 
 This is ideal for compliance automation, ETL, scripting, and backend services.
 
@@ -26,54 +24,68 @@ This is ideal for compliance automation, ETL, scripting, and backend services.
 ## 🔥 Features
 
 ### ✔️ Dynamic Rate Learning
+
 The limiter uses **AIMD (Additive Increase / Multiplicative Decrease)**:
 
-- Slowly increases speed on success  
-- Quickly decreases speed on 429  
-- Auto-pauses when API demands  
-- Stabilizes at the optimal rate  
+- Slowly increases speed on success
+- Quickly decreases speed on 429
+- Auto-pauses when the API tells you to wait
+- Stabilizes at the optimal rate
 
 ### ✔️ API Configuration Registry
+
 Centralized config table for:
 
-- Notion  
-- Vanta  
-- Fieldguide  
-- Any API you add  
+- Notion
+- Vanta
+- Fieldguide
+- Any API you add
 
 ### ✔️ One-Line API Client Creation
+
 ```python
+from api_ratelimiter.clients import make_client_for
 
 notion = make_client_for("notion")
 vanta = make_client_for("vanta")
 fg = make_client_for("fieldguide")
-
 ```
 
 ### ✔️ Fully Modular
-- Swap rate config without touching code
+
+- Swap rate config without touching calling code
 - Add new APIs in seconds
 - No duplication between scripts
 
-### 📦 Installation
+---
+
+## 📦 Installation
+
+Install dependencies:
+
 ```bash
-
 pip install requests
-
 ```
 
 Clone the repo:
+
 ```bash
-
-git clone https://github.com/scottnorton-io/api-limiter.git
-cd api-limiter
-
+git clone https://github.com/scottnorton-io/dynamic-api-rate-limiter.git
+cd dynamic-api-rate-limiter
 ```
 
-### 📘 Quick Start Example (Notion)
-```python
+(Optional) install in editable mode:
 
-from clients import make_client_for
+```bash
+pip install -e .
+```
+
+---
+
+## 📘 Quick Start Example (Notion)
+
+```python
+from api_ratelimiter.clients import make_client_for
 
 notion = make_client_for("notion")
 
@@ -86,31 +98,41 @@ def get_page(page_id: str, token: str):
     resp.raise_for_status()
     return resp.json()
 
-print(get_page("YOUR_PAGE_ID", "YOUR_TOKEN"))
-
+print(get_page("YOUR_PAGE_ID", "YOUR_INTEGRATION_TOKEN"))
 ```
 
-### 📚 Architecture
-```text
+---
 
-api-limiter/
-    dynamic_ratelimiter.py   -> adaptive token bucket
-    dynamic_api_client.py    -> request/response logic
-    api_rate_config.py       -> centralized API config table
-    clients.py               -> client factory
+## 🧠 Architecture
+
+```text
+dynamic-api-rate-limiter/
+    api_ratelimiter/
+        __init__.py
+        dynamic_ratelimiter.py
+        api_rate_config.py
+        clients.py
     examples/
         example_notion.py
         example_vanta.py
         example_fieldguide.py
-
+    .github/
+        workflows/ci.yml
+    README.md
+    CONTRIBUTING.md
+    LICENSE
+    pyproject.toml
+    background.md
 ```
 
-### 🛠 Adding a New API
+---
 
-1. Edit `api_rate_config.py`
+## 🛠 Adding a New API
+
+1. Edit `api_ratelimiter/api_rate_config.py`
 2. Add:
-```python
 
+```python
 API_RATE_CONFIGS["new_api"] = ApiRateConfig(
     name="new_api",
     base_url="https://api.example.com/v1",
@@ -119,21 +141,32 @@ API_RATE_CONFIGS["new_api"] = ApiRateConfig(
     max_rate=5.0,
     increase_step=0.1,
     decrease_factor=0.5,
-    documented_limit_desc="Vendor says 5req/sec burst allowed",
+    documented_limit_desc="Vendor says 5 req/sec allowed.",
 )
-
 ```
-3. Use:
+
+3. Use it:
+
 ```python
-
+from api_ratelimiter.clients import make_client_for
 client = make_client_for("new_api")
-
+resp = client.request("GET", "/some/endpoint")
 ```
 
-Done.
+---
 
-### 📄 License
-MIT License © Scott Norton
+## 📚 Background / Design Notes
 
-### 💬 Questions or contributions?
-Open an issue or PR. Contributions welcome!
+See `background.md` for detailed design discussion (AIMD algorithm, cooldown behavior, token architecture).
+
+---
+
+## 📄 License
+
+MIT License © 2025 Scott Norton
+
+---
+
+## 💬 Contributing
+
+See `CONTRIBUTING.md` for setup, linting, tests, and PR process.

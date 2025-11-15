@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "api-ratelimiter"
+name = "dynamic-api-rate-limiter"
 version = "0.1.0"
 description = "Dynamic, 429-aware API rate limiter with per-API configurations."
 readme = "README.md"
@@ -17,8 +17,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/scottnorton-io/api-ratelimiter"
-Repository = "https://github.com/scottnorton-io/api-ratelimiter"
+Homepage = "https://github.com/scottnorton-io/dynamic-api-rate-limiter"
+Repository = "https://github.com/scottnorton-io/dynamic-api-rate-limiter"
 
 [tool.setuptools]
 packages = ["api_ratelimiter"]
