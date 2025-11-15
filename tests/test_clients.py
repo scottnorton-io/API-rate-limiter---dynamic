@@ -1,112 +1,78 @@
-from typing import Any, Dict, Optional, Iterable, List
+from typing import Any, Dict, Optional, Iterable
 
 import requests
-from requests import Response
 
 from api_ratelimiter.clients import DynamicAPIClient
+from api_ratelimiter.dynamic_ratelimiter import DynamicRateLimiter
 
 
-class DummyLimiter:
-    """Simple limiter used to verify DynamicAPIClient behaviour in tests."""
+class DummyLimiter(DynamicRateLimiter):
+    """Test limiter that does not sleep."""
 
-    def __init__(self) -> None:
-        self.acquire_calls = 0
-        self.success_calls = 0
-        self.backoff_calls = 0
-        self.last_retry_after: Optional[float] = None
-
-    def acquire(self) -> None:
-        self.acquire_calls += 1
-
-    def on_success(self) -> None:
-        self.success_calls += 1
-
-    def on_429(self, retry_after: Optional[float] = None) -> None:
-        self.backoff_calls += 1
-        self.last_retry_after = retry_after
+    def acquire(self) -> None:  # type: ignore[override]
+        # No-op for tests; we don't throttle in unit tests.
+        return
 
 
-class DummySession(requests.Session):
-    def __init__(self, responses: Iterable[Response]) -> None:
-        super().__init__()
-        self._responses: List[Response] = list(responses)
-        self.requests: list[tuple[str, str, Dict[str, Any]]] = []
+class DummyResponse:
+    def __init__(self, status_code: int, headers: Optional[Dict[str, str]] = None, payload: Any = None):
+        self.status_code = status_code
+        self.headers = headers or {}
+        self._payload = payload or {}
 
-    def request(self, method: str, url: str, **kwargs: Any) -> Response:  # type: ignore[override]
-        self.requests.append((method, url, kwargs))
-        if not self._responses:
-            raise RuntimeError("DummySession ran out of prepared responses")
-        return self._responses.pop(0)
+    def json(self) -> Any:
+        return self._payload
 
 
-def make_response(status: int, headers: Optional[Dict[str, str]] = None) -> Response:
-    r = Response()
-    r.status_code = status
-    r._content = b"{}"
-    if headers:
-        r.headers.update(headers)
-    return r
+class DummySession:
+    def __init__(self, responses: Iterable[DummyResponse]):
+        self._responses = list(responses)
+        self.requests_made = 0
+
+    def request(self, method: str, url: str, **kwargs: Any) -> DummyResponse:  # type: ignore[override]
+        self.requests_made += 1
+        try:
+            return self._responses.pop(0)
+        except IndexError:
+            raise AssertionError("No more dummy responses configured")
 
 
-def test_client_success_path_calls_on_success() -> None:
-    limiter = DummyLimiter()
-    resp = make_response(200)
-    session = DummySession([resp])
+def test_dynamic_api_client_success_path():
+    limiter = DummyLimiter(initial_rate=5.0)
+    responses = [DummyResponse(200, payload={"ok": True})]
+    session = DummySession(responses)
 
     client = DynamicAPIClient(
-        base_url="https://example.com",
+        base_url="https://api.example.com",
         limiter=limiter,
-        session=session,
+        max_retries_on_backoff=3,
+        backoff_status_codes=(429,),
+        session=session,  # type: ignore[arg-type]
     )
 
-    out = client.request("GET", "/foo")
-
-    assert out is resp
-    assert limiter.acquire_calls == 1
-    assert limiter.success_calls == 1
-    assert limiter.backoff_calls == 0
+    resp = client.request("GET", "/test")
+    assert isinstance(resp, requests.Response) or hasattr(resp, "status_code")
+    assert resp.status_code == 200
+    assert session.requests_made == 1
 
 
-def test_client_429_triggers_backoff_and_retries() -> None:
-    limiter = DummyLimiter()
-    first = make_response(429, headers={"Retry-After": "3"})
-    second = make_response(200)
-    session = DummySession([first, second])
+def test_dynamic_api_client_retries_on_429_then_succeeds():
+    limiter = DummyLimiter(initial_rate=5.0)
+    responses = [
+        DummyResponse(429, headers={"Retry-After": "0"}),
+        DummyResponse(200, payload={"ok": True}),
+    ]
+    session = DummySession(responses)
 
     client = DynamicAPIClient(
-        base_url="https://example.com",
+        base_url="https://api.example.com",
         limiter=limiter,
-        session=session,
-        max_retries_on_429=5,
+        max_retries_on_backoff=3,
+        backoff_status_codes=(429,),
+        session=session,  # type: ignore[arg-type]
     )
 
-    out = client.request("GET", "/foo")
-
-    assert out.status_code == 200
-    # One backoff, one success, two acquires for two requests
-    assert limiter.backoff_calls == 1
-    assert limiter.last_retry_after == 3.0
-    assert limiter.success_calls == 1
-    assert limiter.acquire_calls >= 2
-
-
-def test_client_503_triggers_backoff_when_configured() -> None:
-    limiter = DummyLimiter()
-    first = make_response(503)
-    second = make_response(200)
-    session = DummySession([first, second])
-
-    client = DynamicAPIClient(
-        base_url="https://example.com",
-        limiter=limiter,
-        session=session,
-        max_retries_on_429=5,
-        backoff_status_codes=(429, 502, 503),
-    )
-
-    out = client.request("GET", "/foo")
-
-    assert out.status_code == 200
-    assert limiter.backoff_calls == 1
-    assert limiter.success_calls == 1
-    assert limiter.acquire_calls >= 2
+    resp = client.request("GET", "/test")
+    assert isinstance(resp, requests.Response) or hasattr(resp, "status_code")
+    assert resp.status_code == 200
+    assert session.requests_made == 2

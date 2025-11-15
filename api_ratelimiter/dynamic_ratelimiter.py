@@ -1,22 +1,44 @@
+"""Dynamic, AIMD-style API rate limiter.
+
+This module provides :class:`DynamicRateLimiter`, an adaptive token-bucket
+rate limiter that:
+
+- Tracks a dynamic "current_rate" (requests per second).
+- Uses Additive Increase / Multiplicative Decrease (AIMD) to tune the rate.
+- Supports cooldown windows (e.g. Retry-After from upstream APIs).
+- Exposes a lightweight snapshot() method for observability.
+
+The limiter is thread-safe and designed for a single-process environment.
+For multi-process or multi-node deployments, consider a distributed
+token bucket implementation as a future enhancement.
+"""
+
+from __future__ import annotations
+
+import logging
 import time
 import threading
-from typing import Optional
+from typing import Dict, Optional
+
+logger = logging.getLogger(__name__)
 
 
 class DynamicRateLimiter:
-    """
-    Adaptive token-bucket rate limiter with AIMD-style tuning.
+    """Adaptive token-bucket rate limiter with AIMD-style tuning.
 
-    - current_rate: requests per second (dynamic)
-    - min_rate / max_rate: safety bounds for the dynamic rate
-    - increase_step: additive increase on success
-    - decrease_factor: multiplicative decrease on backoff (e.g. 429)
-
-    Usage:
-        limiter = DynamicRateLimiter(initial_rate=5.0, min_rate=0.2, max_rate=20.0)
-        limiter.acquire()
-        # make request...
-        limiter.on_success()   # or limiter.on_backoff(retry_after)
+    Parameters
+    ----------
+    initial_rate:
+        Starting rate in requests per second.
+    min_rate:
+        Lower bound for the dynamic rate.
+    max_rate:
+        Upper bound for the dynamic rate.
+    increase_step:
+        Additive increment applied to the rate on successful requests.
+    decrease_factor:
+        Multiplicative factor applied to the rate when backoff is triggered
+        (e.g. on HTTP 429). Must be in (0, 1].
     """
 
     def __init__(
@@ -29,6 +51,8 @@ class DynamicRateLimiter:
     ) -> None:
         if initial_rate <= 0:
             raise ValueError("initial_rate must be > 0")
+        if not (0 < decrease_factor <= 1):
+            raise ValueError("decrease_factor must be in (0, 1]")
 
         self.current_rate = float(initial_rate)
         self.min_rate = float(min_rate)
@@ -44,6 +68,17 @@ class DynamicRateLimiter:
         self._cooldown_until: float = 0.0
 
         self._lock = threading.Lock()
+
+        logger.debug(
+            "DynamicRateLimiter initialized: %s",
+            {
+                "current_rate": self.current_rate,
+                "min_rate": self.min_rate,
+                "max_rate": self.max_rate,
+                "increase_step": self.increase_step,
+                "decrease_factor": self.decrease_factor,
+            },
+        )
 
     def _refill(self, now: float) -> None:
         """Refill tokens based on elapsed time and current_rate."""
@@ -62,8 +97,7 @@ class DynamicRateLimiter:
         self._last_refill = now
 
     def acquire(self) -> None:
-        """
-        Block until a token is available and we're out of cooldown.
+        """Block until a token is available and we're out of cooldown.
 
         This should be called immediately before making an outbound request.
         """
@@ -93,23 +127,31 @@ class DynamicRateLimiter:
     def on_success(self) -> None:
         """Call this after a successful request to gently increase rate."""
         with self._lock:
+            prev_rate = self.current_rate
             self.current_rate = min(
                 self.max_rate,
                 self.current_rate + self.increase_step,
             )
-
-    def on_backoff(self, retry_after: Optional[float] = None) -> None:
-        """Alias for :meth:`on_429` for more generic backoff semantics."""
-        self.on_429(retry_after=retry_after)
+            if self.current_rate != prev_rate:
+                logger.debug(
+                    "DynamicRateLimiter on_success: rate increased",
+                    extra={
+                        "previous_rate": prev_rate,
+                        "new_rate": self.current_rate,
+                    },
+                )
 
     def on_429(self, retry_after: Optional[float] = None) -> None:
-        """
-        Call this when you receive a backoff-worthy response (429, 502, 503, etc.).
+        """Call this when you receive a 429 or similar backoff signal.
 
-        - Scales rate down multiplicatively.
-        - Applies cooldown based on Retry-After or a conservative guess.
+        Parameters
+        ----------
+        retry_after:
+            Optional retry-after interval in seconds. If not provided,
+            a conservative default is calculated from the current rate.
         """
         with self._lock:
+            prev_rate = self.current_rate
             # Multiplicative decrease
             self.current_rate = max(
                 self.min_rate,
@@ -128,3 +170,35 @@ class DynamicRateLimiter:
 
             # Trim tokens so we restart cautiously
             self._tokens = min(self._tokens, self.current_rate)
+
+            logger.warning(
+                "DynamicRateLimiter backoff triggered",
+                extra={
+                    "previous_rate": prev_rate,
+                    "new_rate": self.current_rate,
+                    "retry_after": retry_after,
+                    "cooldown_until": self._cooldown_until,
+                },
+            )
+
+    def snapshot(self) -> Dict[str, float]:
+        """Return a lightweight snapshot of limiter internals.
+
+        The values are intended for metrics / logging and are not guaranteed
+        to be perfectly synchronized with in-flight operations, but they are
+        good enough for observability dashboards.
+
+        Returns
+        -------
+        dict
+            A dictionary with keys:
+            - current_rate
+            - tokens
+            - cooldown_until
+        """
+        with self._lock:
+            return {
+                "current_rate": float(self.current_rate),
+                "tokens": float(self._tokens),
+                "cooldown_until": float(self._cooldown_until),
+            }

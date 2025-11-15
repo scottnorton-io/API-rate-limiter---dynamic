@@ -1,4 +1,8 @@
-from typing import Optional, Dict, Any, Iterable, Tuple
+"""HTTP client utilities built on top of DynamicRateLimiter."""
+
+from __future__ import annotations
+
+from typing import Iterable, Optional, Sequence, Dict, Any
 
 import requests
 
@@ -7,18 +11,15 @@ from .api_rate_config import get_api_rate_config, ApiRateConfig
 
 
 class DynamicAPIClient:
-    """
-    HTTP client that uses DynamicRateLimiter and backs off on selected status codes.
+    """HTTP client that uses a :class:`DynamicRateLimiter` and respects backoff.
 
-    Behaviour:
+    It will:
 
-    - Calls limiter.acquire() before each outbound request.
-    - On non-backoff status codes:
-        - Calls limiter.on_success() and returns the response.
-    - On backoff status codes (default: 429, 502, 503):
-        - Reads `Retry-After` header if present (seconds).
-        - Calls limiter.on_429(retry_after_seconds).
-        - Retries up to `max_retries_on_429` times.
+    - Call limiter.acquire() before each outbound request.
+    - Treat selected HTTP status codes as backoff signals (default: 429).
+    - Use Retry-After for 429 when present.
+    - Call limiter.on_success() on non-backoff responses.
+    - Call limiter.on_429(retry_after) on backoff responses.
     """
 
     def __init__(
@@ -26,19 +27,17 @@ class DynamicAPIClient:
         base_url: str,
         *,
         limiter: DynamicRateLimiter,
-        max_retries_on_429: int = 20,
-        backoff_status_codes: Optional[Iterable[int]] = None,
+        max_retries_on_backoff: int = 20,
+        backoff_status_codes: Iterable[int] = (429,),
         session: Optional[requests.Session] = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.session = session or requests.Session()
-        self.max_retries_on_429 = max_retries_on_429
-        self.limiter = limiter
+        self.max_retries_on_backoff = max_retries_on_backoff
 
-        if backoff_status_codes is None:
-            # 429 Too Many Requests, plus 502 / 503 for overload / transient failures.
-            backoff_status_codes = (429, 502, 503)
-        self.backoff_status_codes: Tuple[int, ...] = tuple(backoff_status_codes)
+        # Normalize backoff status codes to a tuple for fast "in" checks
+        self.backoff_status_codes: Sequence[int] = tuple(backoff_status_codes)
+        self.limiter = limiter
 
     def request(
         self,
@@ -50,9 +49,7 @@ class DynamicAPIClient:
         headers: Optional[Dict[str, str]] = None,
         **kwargs: Any,
     ) -> requests.Response:
-        """
-        Perform a single HTTP request with dynamic, backoff-aware rate limiting.
-        """
+        """Perform a single HTTP request with dynamic, backoff-aware rate limiting."""
         url = f"{self.base_url}/{path.lstrip('/')}"
         retries = 0
 
@@ -69,32 +66,30 @@ class DynamicAPIClient:
                 **kwargs,
             )
 
-            status = response.status_code
-
-            # Normal (non-backoff) path: treat as a successful sample.
-            if status not in self.backoff_status_codes:
+            # If not a backoff status, treat as success and return
+            if response.status_code not in self.backoff_status_codes:
                 self.limiter.on_success()
                 return response
 
-            # Backoff path for overloaded / rate-limited responses.
+            # Backoff-handling path
             retries += 1
-            retry_after_raw = response.headers.get("Retry-After")
+
             retry_after_seconds: Optional[float] = None
 
-            if retry_after_raw is not None:
-                try:
-                    retry_after_seconds = float(retry_after_raw)
-                except ValueError:
-                    # If 'Retry-After' is a date or malformed, ignore and use fallback.
-                    retry_after_seconds = None
+            if response.status_code == 429:
+                retry_after_raw = response.headers.get("Retry-After")
+                if retry_after_raw is not None:
+                    try:
+                        retry_after_seconds = float(retry_after_raw)
+                    except ValueError:
+                        retry_after_seconds = None
 
-            # We reuse on_429 as the generic backoff hook.
+            # Use the limiter's backoff handler (named on_429 for historical reasons)
             self.limiter.on_429(retry_after_seconds)
 
-            if retries > self.max_retries_on_429:
+            if retries > self.max_retries_on_backoff:
                 raise RuntimeError(
-                    f"Exceeded max_retries_on_429 ({self.max_retries_on_429}) for {url} "
-                    f"after backoff status {status}."
+                    f"Exceeded max_retries_on_backoff ({self.max_retries_on_backoff}) for {url}"
                 )
 
 
@@ -113,23 +108,17 @@ def make_client_for(
     api_name: str,
     *,
     session: Optional[requests.Session] = None,
-    max_retries_on_429: int = 20,
-    backoff_status_codes: Optional[Iterable[int]] = None,
+    max_retries_on_backoff: int = 20,
+    backoff_status_codes: Iterable[int] = (429,),
 ) -> DynamicAPIClient:
-    """
-    Factory: build a DynamicAPIClient using the named API's rate config.
-
-    Example:
-        notion = make_client_for("notion")
-        resp = notion.request("GET", "/pages/..."
-    """
+    """Factory: build a :class:`DynamicAPIClient` using the named API's rate config."""
     cfg = get_api_rate_config(api_name)
     limiter = _build_limiter_from_config(cfg)
 
     return DynamicAPIClient(
         base_url=cfg.base_url,
         limiter=limiter,
-        max_retries_on_429=max_retries_on_429,
+        max_retries_on_backoff=max_retries_on_backoff,
         backoff_status_codes=backoff_status_codes,
         session=session,
     )
