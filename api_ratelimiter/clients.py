@@ -104,6 +104,31 @@ def _build_limiter_from_config(cfg: ApiRateConfig) -> DynamicRateLimiter:
     )
 
 
+
+def make_client_from_config(
+    cfg: ApiRateConfig,
+    *,
+    session: Optional[requests.Session] = None,
+    max_retries_on_backoff: int = 20,
+    backoff_status_codes: Iterable[int] = (429,),
+) -> DynamicAPIClient:
+    """Factory: build a :class:`DynamicAPIClient` from an :class:`ApiRateConfig`.
+
+    This is useful when you want to construct configs dynamically (for example,
+    from JSON, environment variables, or your own registry) instead of relying
+    solely on :data:`API_RATE_CONFIGS`.
+    """
+    limiter = _build_limiter_from_config(cfg)
+
+    return DynamicAPIClient(
+        base_url=cfg.base_url,
+        limiter=limiter,
+        max_retries_on_backoff=max_retries_on_backoff,
+        backoff_status_codes=backoff_status_codes,
+        session=session,
+    )
+
+
 def make_client_for(
     api_name: str,
     *,

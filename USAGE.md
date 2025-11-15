@@ -576,3 +576,26 @@ data = resp.json()
 
 The dynamic limiter will adapt based on rate-limit responses from the OpenAI API,
 making it safer to run higher-throughput jobs.
+
+---
+
+# 23. Configuration Overrides
+
+If you need to tune rate limits or add internal services without changing
+code, you can use the configuration helpers:
+
+```python
+from api_ratelimiter import (
+    load_api_rate_overrides_json,
+    merged_api_rate_configs,
+    make_client_from_config,
+)
+
+overrides = load_api_rate_overrides_json("rate_overrides.json")
+all_configs = merged_api_rate_configs(overrides)
+
+cfg = all_configs["my-internal-api"]
+client = make_client_from_config(cfg)
+```
+
+See `docs/configuration.md` for the expected JSON format and more examples.
